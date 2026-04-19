@@ -14,7 +14,7 @@ Auto-send transactions on DAC Quantum Chain testnet — multi-wallet, proxy supp
 ## Setup
 
 ```bash
-git clone (https://github.com/realmisky/dac-autobot.git)
+git clone https://github.com/realmisky/dac-autobot.git
 cd dac-autobot
 npm install
 ```
