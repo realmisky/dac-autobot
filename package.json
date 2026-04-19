@@ -1,0 +1,18 @@
+{
+  "name": "dac-autobot",
+  "version": "1.0.0",
+  "description": "DAC Quantum Chain Testnet Auto-Bot - auto send transactions across wallets",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0",
+    "https-proxy-agent": "^7.0.4",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
