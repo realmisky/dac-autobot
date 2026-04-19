@@ -4,93 +4,94 @@ const { HttpsProxyAgent } = require("https-proxy-agent");
 const fetch = require("node-fetch");
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
-// Fill these in from https://dacblockchain.gitbook.io/docs
 const CONFIG = {
   RPC_URL: "https://rpctest.dachain.tech",
   CHAIN_ID: 21894,
   SYMBOL: "DACC",
   FAUCET_URL: "https://faucet.dachain.tech",
 
-  // Bot behavior
-  DELAY_BETWEEN_TX_MS: 3000,       // ms between each tx
-  DELAY_BETWEEN_WALLETS_MS: 2000,  // ms between wallets
-  LOOP_DELAY_MS: 60000,            // ms between full loops (1 min)
-  LOOPS: 0,                        // 0 = infinite loop
-  TX_PER_WALLET: 5,                // transactions per wallet per loop
-  SEND_AMOUNT_ETH: "0.001",        // amount to send per tx
-  RANDOMIZE_AMOUNT: true,          // slight random variation on amount
-  SELF_SEND: false,                // true = send to self; false = send to next wallet
+  DELAY_BETWEEN_TX_MS: 3000,
+  DELAY_BETWEEN_WALLETS_MS: 2000,
+  LOOP_DELAY_MS: 60000,
+  LOOPS: 0,
+  TX_PER_WALLET: 5,
+  SEND_AMOUNT_ETH: "0.001",
+  RANDOMIZE_AMOUNT: true,
+  FAUCET_INTERVAL_MS: 7 * 60 * 60 * 1000, // 7 hours
 };
-// ───────────────────────────────────────────────────────────────────────────
 
 // ─── COLORS ────────────────────────────────────────────────────────────────
 const c = {
-  reset: "\x1b[0m",
-  bright: "\x1b[1m",
-  cyan: "\x1b[36m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  red: "\x1b[31m",
-  blue: "\x1b[34m",
-  magenta: "\x1b[35m",
-  gray: "\x1b[90m",
+  reset: "\x1b[0m", bright: "\x1b[1m", cyan: "\x1b[36m",
+  green: "\x1b[32m", yellow: "\x1b[33m", red: "\x1b[31m",
+  blue: "\x1b[34m", magenta: "\x1b[35m", gray: "\x1b[90m",
 };
 
 function log(level, msg) {
   const ts = new Date().toLocaleTimeString("id-ID", { hour12: false });
   const prefix = {
-    info:    `${c.cyan}[INFO]${c.reset}`,
-    success: `${c.green}[OK]${c.reset}  `,
-    warn:    `${c.yellow}[WARN]${c.reset}`,
-    error:   `${c.red}[ERR]${c.reset} `,
-    tx:      `${c.magenta}[TX]${c.reset}  `,
-    wallet:  `${c.blue}[WLT]${c.reset} `,
+    info:    `${c.cyan}[INFO]${c.reset} `,
+    success: `${c.green}[OK]${c.reset}   `,
+    warn:    `${c.yellow}[WARN]${c.reset} `,
+    error:   `${c.red}[ERR]${c.reset}  `,
+    tx:      `${c.magenta}[TX]${c.reset}   `,
+    wallet:  `${c.blue}[WLT]${c.reset}  `,
     loop:    `${c.bright}${c.cyan}[LOOP]${c.reset}`,
-  }[level] || `[LOG]`;
+    faucet:  `${c.yellow}[FCT]${c.reset}  `,
+  }[level] || `[LOG]  `;
   console.log(`${c.gray}${ts}${c.reset} ${prefix} ${msg}`);
 }
-// ───────────────────────────────────────────────────────────────────────────
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function randomAmount(base) {
-  const variation = (Math.random() * 0.0005 - 0.00025).toFixed(8);
-  const amount = (parseFloat(base) + parseFloat(variation)).toFixed(6);
-  return ethers.parseEther(Math.max(0.0001, parseFloat(amount)).toString());
+  const v = (Math.random() * 0.0005 - 0.00025).toFixed(8);
+  const a = (parseFloat(base) + parseFloat(v)).toFixed(6);
+  return ethers.parseEther(Math.max(0.0001, parseFloat(a)).toString());
 }
 
-function shortAddr(addr) {
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-}
+const shortAddr = (addr) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 
 function loadLines(file) {
   if (!fs.existsSync(file)) return [];
-  return fs
-    .readFileSync(file, "utf-8")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  return fs.readFileSync(file, "utf-8")
+    .split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+
+function randomRecipient(addresses, excludeAddr) {
+  const filtered = addresses.filter(
+    (a) => a.toLowerCase() !== excludeAddr.toLowerCase()
+  );
+  const pool = filtered.length > 0 ? filtered : addresses;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function formatCountdown(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${h}h ${m}m ${s}s`;
+}
+
+function isValidProxy(p) {
+  try { new URL(p); return p.startsWith("http"); } catch { return false; }
 }
 
 function buildProvider(proxyUrl) {
-  if (proxyUrl) {
+  if (proxyUrl && isValidProxy(proxyUrl)) {
     const agent = new HttpsProxyAgent(proxyUrl);
-    const fetchWithProxy = (url, opts = {}) =>
-      fetch(url, { ...opts, agent });
+    const fp = (url, opts = {}) => fetch(url, { ...opts, agent });
     return new ethers.JsonRpcProvider(
       CONFIG.RPC_URL,
-      { chainId: CONFIG.CHAIN_ID, name: "dac-testnet" },      { fetchFunc: fetchWithProxy }
+      { chainId: CONFIG.CHAIN_ID, name: "DAC Testnet" },
+      { fetchFunc: fp }
     );
   }
   return new ethers.JsonRpcProvider(CONFIG.RPC_URL, {
-    chainId: CONFIG.CHAIN_ID,
-    name: "DAC Testnet",
+    chainId: CONFIG.CHAIN_ID, name: "DAC Testnet",
   });
 }
-// ───────────────────────────────────────────────────────────────────────────
 
 // ─── BANNER ────────────────────────────────────────────────────────────────
 function banner() {
@@ -102,38 +103,66 @@ ${c.cyan}${c.bright}
   ██║  ██║██╔══██║██║         ██╔══██╗██║   ██║   ██║   
   ██████╔╝██║  ██║╚██████╗    ██████╔╝╚██████╔╝   ██║   
   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝    ╚═════╝  ╚═════╝    ╚═╝   
-${c.reset}${c.gray}  DAC Quantum Chain Testnet Auto-Bot  |  by Danu${c.reset}
+${c.reset}${c.gray}  DAC Testnet Auto-Bot  |  by Danu  |  Chain ID: 21894${c.reset}
   `);
 }
-// ───────────────────────────────────────────────────────────────────────────
 
-// ─── FAUCET (optional) ─────────────────────────────────────────────────────
-async function claimFaucet(address, proxyUrl) {
+// ─── FAUCET ────────────────────────────────────────────────────────────────
+const lastFaucetClaim = {};
+
+async function claimFaucet(address, proxyUrl, force = false) {
+  const now = Date.now();
+  const last = lastFaucetClaim[address] || 0;
+  const elapsed = now - last;
+
+  if (!force && elapsed < CONFIG.FAUCET_INTERVAL_MS) {
+    const remaining = CONFIG.FAUCET_INTERVAL_MS - elapsed;
+    log("faucet", `${shortAddr(address)} cooldown: ${formatCountdown(remaining)} left`);
+    return false;
+  }
+
   try {
-    const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
-    // Attempt POST to faucet — adjust body format per actual faucet API
-    const res = await fetch(CONFIG.FAUCET_URL + "/api/claim", {
+    const agent = (proxyUrl && isValidProxy(proxyUrl)) ? new HttpsProxyAgent(proxyUrl) : undefined;
+    // ⚠️ Update endpoint & body setelah inspect di browser DevTools
+    const res = await fetch(CONFIG.FAUCET_URL + "/api/faucet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ address }),
-      agent,
+      ...(agent ? { agent } : {}),
     });
+
     if (res.ok) {
-      log("success", `Faucet claimed for ${shortAddr(address)}`);
+      lastFaucetClaim[address] = now;
+      log("success", `Faucet claimed → ${shortAddr(address)} ✓`);
       return true;
     } else {
       const txt = await res.text().catch(() => "");
-      log("warn", `Faucet skip ${shortAddr(address)}: ${res.status} ${txt.slice(0, 60)}`);
+      log("warn", `Faucet failed ${shortAddr(address)}: ${res.status} ${txt.slice(0, 80)}`);
       return false;
     }
   } catch (e) {
-    log("warn", `Faucet error for ${shortAddr(address)}: ${e.message}`);
+    log("warn", `Faucet error ${shortAddr(address)}: ${e.message}`);
     return false;
   }
 }
-// ───────────────────────────────────────────────────────────────────────────
 
-// ─── CORE TX LOGIC ─────────────────────────────────────────────────────────
+async function claimFaucetAllWallets(privateKeys, proxies) {
+  log("faucet", `─── Auto faucet: ${privateKeys.length} wallets ───`);
+  for (let i = 0; i < privateKeys.length; i++) {
+    try {
+      const pk = privateKeys[i].startsWith("0x") ? privateKeys[i] : `0x${privateKeys[i]}`;
+      const wallet = new ethers.Wallet(pk);
+      const proxy = proxies.length > 0 ? proxies[i % proxies.length] : null;
+      await claimFaucet(wallet.address, proxy, true);
+      await sleep(1500);
+    } catch (e) {
+      log("error", `Faucet wallet[${i}]: ${e.message}`);
+    }
+  }
+  log("faucet", `Next auto-claim in ${formatCountdown(CONFIG.FAUCET_INTERVAL_MS)}`);
+}
+
+// ─── TX LOGIC ──────────────────────────────────────────────────────────────
 async function sendTx(wallet, toAddress, txIndex) {
   try {
     const amount = CONFIG.RANDOMIZE_AMOUNT
@@ -149,14 +178,11 @@ async function sendTx(wallet, toAddress, txIndex) {
       maxPriorityFeePerGas: feeData.maxPriorityFeePerGas || feeData.gasPrice,
     });
 
-    log(
-      "tx",
-      `#${txIndex} ${shortAddr(wallet.address)} → ${shortAddr(toAddress)} | ${ethers.formatEther(amount)} ${CONFIG.SYMBOL} | hash: ${c.cyan}${tx.hash.slice(0, 18)}...${c.reset}`
-    );
+    log("tx", `#${txIndex} ${shortAddr(wallet.address)} → ${shortAddr(toAddress)} | ${ethers.formatEther(amount)} ${CONFIG.SYMBOL} | ${c.cyan}${tx.hash.slice(0, 20)}...${c.reset}`);
 
     const receipt = await tx.wait(1);
     if (receipt && receipt.status === 1) {
-      log("success", `Confirmed in block ${receipt.blockNumber}`);
+      log("success", `Confirmed block #${receipt.blockNumber}`);
       return true;
     } else {
       log("warn", `TX reverted: ${tx.hash}`);
@@ -169,128 +195,124 @@ async function sendTx(wallet, toAddress, txIndex) {
   }
 }
 
-async function processWallet(pk, index, wallets, proxy) {
+async function processWallet(pk, index, targetAddresses, proxy) {
   const provider = buildProvider(proxy || null);
-
   let wallet;
   try {
     wallet = new ethers.Wallet(pk.startsWith("0x") ? pk : `0x${pk}`, provider);
   } catch (e) {
-    log("error", `Invalid private key at index ${index}: ${e.message}`);
+    log("error", `Invalid PK at index ${index}: ${e.message}`);
     return;
   }
 
   log("wallet", `[${index + 1}] ${wallet.address}`);
 
-  // Check balance
   let balance;
   try {
     balance = await provider.getBalance(wallet.address);
     log("info", `Balance: ${ethers.formatEther(balance)} ${CONFIG.SYMBOL}`);
   } catch (e) {
-    log("error", `Could not fetch balance: ${e.message}`);
+    log("error", `Balance check failed: ${e.message}`);
     return;
   }
 
-  // Try faucet if balance is low
+  // Low balance → try faucet (respects 7h cooldown)
   if (balance < ethers.parseEther("0.01")) {
-    log("info", `Low balance, attempting faucet claim...`);
+    log("info", `Low balance, checking faucet cooldown...`);
     await claimFaucet(wallet.address, proxy);
     await sleep(3000);
     balance = await provider.getBalance(wallet.address).catch(() => 0n);
   }
 
   if (balance < ethers.parseEther("0.0001")) {
-    log("warn", `Insufficient balance to send. Skipping.`);
+    log("warn", `Still insufficient balance. Skipping.`);
     return;
   }
 
-  // Determine recipient
-  const toAddress = CONFIG.SELF_SEND
-    ? wallet.address
-    : wallets[(index + 1) % wallets.length]; // send to next wallet
-
-  // Execute transactions
+  // Send TX_PER_WALLET txs, each to a random address from address.txt
   let txOk = 0;
   for (let i = 0; i < CONFIG.TX_PER_WALLET; i++) {
+    const toAddress = randomRecipient(targetAddresses, wallet.address);
     const ok = await sendTx(wallet, toAddress, i + 1);
     if (ok) txOk++;
     await sleep(CONFIG.DELAY_BETWEEN_TX_MS);
   }
 
-  log("info", `Done: ${txOk}/${CONFIG.TX_PER_WALLET} txs succeeded for ${shortAddr(wallet.address)}`);
+  log("info", `Done: ${txOk}/${CONFIG.TX_PER_WALLET} txs OK for ${shortAddr(wallet.address)}`);
 }
-// ───────────────────────────────────────────────────────────────────────────
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────
 async function main() {
   banner();
 
-  const privateKeys = loadLines("pk.txt");
-  const proxies = loadLines("proxy.txt");
+  const privateKeys     = loadLines("pk.txt");
+  const proxies         = loadLines("proxy.txt");
+  const targetAddresses = loadLines("address.txt");
 
   if (privateKeys.length === 0) {
-    log("error", "No private keys found in pk.txt");
+    log("error", "pk.txt is empty — add your private keys");
+    process.exit(1);
+  }
+  if (targetAddresses.length === 0) {
+    log("error", "address.txt is empty — add target addresses");
     process.exit(1);
   }
 
-  // Derive wallet addresses for round-robin sending
-  const walletAddresses = privateKeys.map((pk) => {
-    try {
-      const w = new ethers.Wallet(pk.startsWith("0x") ? pk : `0x${pk}`);
-      return w.address;
-    } catch {
-      return null;
-    }
-  }).filter(Boolean);
-
-  log("info", `Loaded ${c.bright}${privateKeys.length}${c.reset} wallets, ${proxies.length} proxies`);
-  log("info", `Chain: ${c.cyan}DAC Testnet (Chain ID: 21894)${c.reset} | RPC: ${CONFIG.RPC_URL}`);
-  log("info", `Mode: ${CONFIG.SELF_SEND ? "Self-send" : "Round-robin"} | ${CONFIG.TX_PER_WALLET} tx/wallet/loop`);
-  log("info", `Loop delay: ${CONFIG.LOOP_DELAY_MS / 1000}s | ${CONFIG.LOOPS === 0 ? "∞ loops" : CONFIG.LOOPS + " loops"}`);
+  log("info", `Wallets    : ${c.bright}${privateKeys.length}${c.reset}`);
+  log("info", `Targets    : ${c.bright}${targetAddresses.length}${c.reset} addresses (random per tx)`);
+  log("info", `Proxies    : ${proxies.length}`);
+  log("info", `Chain      : ${c.cyan}DAC Testnet${c.reset} | ID: 21894`);
+  log("info", `TX/wallet  : ${CONFIG.TX_PER_WALLET} | Amount: ~${CONFIG.SEND_AMOUNT_ETH} ${CONFIG.SYMBOL}`);
+  log("info", `Loop delay : ${CONFIG.LOOP_DELAY_MS / 1000}s | Faucet: every 7h (3x/day)`);
+  log("info", `Loops      : ${CONFIG.LOOPS === 0 ? "∞ infinite" : CONFIG.LOOPS}`);
   console.log();
 
-  // Network connectivity check
+  // Network check
   try {
     const provider = buildProvider(null);
     const blockNum = await provider.getBlockNumber();
-    log("success", `Connected! Current block: ${c.green}${blockNum}${c.reset}`);
+    log("success", `Connected! Block: ${c.green}#${blockNum}${c.reset}`);
   } catch (e) {
-    log("error", `Cannot connect to RPC: ${e.message}`);
-    log("warn", `Check CONFIG.RPC_URL and CONFIG.CHAIN_ID in index.js`);
+    log("error", `RPC connection failed: ${e.message}`);
     process.exit(1);
   }
-
   console.log();
 
+  // ── Faucet scheduler: claim immediately, then every 7h ──
+  await claimFaucetAllWallets(privateKeys, proxies);
+  console.log();
+
+  setInterval(async () => {
+    console.log();
+    await claimFaucetAllWallets(privateKeys, proxies);
+    console.log();
+  }, CONFIG.FAUCET_INTERVAL_MS);
+
+  // ── TX loop ──
   let loop = 0;
   while (CONFIG.LOOPS === 0 || loop < CONFIG.LOOPS) {
     loop++;
-    log("loop", `─── Loop #${loop} started ─── ${new Date().toLocaleString("id-ID")}`);
+    log("loop", `─── Loop #${loop} | ${new Date().toLocaleString("id-ID")} ───`);
     console.log();
 
     for (let i = 0; i < privateKeys.length; i++) {
       const proxy = proxies.length > 0 ? proxies[i % proxies.length] : null;
-      if (proxy) log("info", `Using proxy: ${proxy}`);
-
-      await processWallet(privateKeys[i], i, walletAddresses, proxy);
+      if (proxy) log("info", `Proxy: ${proxy}`);
+      await processWallet(privateKeys[i], i, targetAddresses, proxy);
       console.log();
-
-      if (i < privateKeys.length - 1) {
-        await sleep(CONFIG.DELAY_BETWEEN_WALLETS_MS);
-      }
+      if (i < privateKeys.length - 1) await sleep(CONFIG.DELAY_BETWEEN_WALLETS_MS);
     }
 
     log("loop", `─── Loop #${loop} complete ───`);
 
     if (CONFIG.LOOPS === 0 || loop < CONFIG.LOOPS) {
-      log("info", `Waiting ${CONFIG.LOOP_DELAY_MS / 1000}s before next loop...`);
+      log("info", `Waiting ${CONFIG.LOOP_DELAY_MS / 1000}s...`);
       console.log();
       await sleep(CONFIG.LOOP_DELAY_MS);
     }
   }
 
-  log("success", "All loops complete. Bot done.");
+  log("success", "All loops done.");
 }
 
 main().catch((e) => {
